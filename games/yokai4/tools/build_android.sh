@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Android build of Yo-kai Watch 4, native execution: cmake (NDK) -> libyokai4.so -> aapt2 -> zipalign -> apksigner ->
-# private/yokai4/apk/yokai4.apk. No Java and no on-device importer: the shaders are translated on the PC beforehand
+# private/yokai4/apk/yokai4.apk. One Java class (TextInput) and no on-device importer: the shaders are translated on the PC beforehand
 # (games/yokai4/tools/hbh1_shaders.py + the spirv_harness, see games/yokai4/NOTES.md) and copied to the phone with the
 # exefs and the RomFS.
 #
@@ -66,6 +66,13 @@ done
 "$bt/aapt2" compile --dir "$root/android/res" -o "$out/res.zip"
 "$bt/aapt2" link -o "$out/base.apk" -I "$jar" --manifest "$root/games/yokai4/AndroidManifest.xml" "$out/res.zip"
 (cd "$out" && zip -q -r -9 base.apk lib)
+# The one Java class (games/yokai4/java: TextInput, the text box for the game's keyboard).
+mkdir -p "$out/classes" "$out/dex"
+find "$root/games/yokai4/java" -name '*.java' > "$out/sources.txt"
+javac -encoding UTF-8 -source 1.8 -target 1.8 -Xlint:-options -bootclasspath "$jar" -d "$out/classes" @"$out/sources.txt"
+find "$out/classes" -name '*.class' > "$out/classes.txt"
+"$bt/d8" --release --min-api 29 --lib "$jar" --output "$out/dex" @"$out/classes.txt"
+(cd "$out/dex" && zip -q -j "$out/base.apk" classes.dex)
 "$bt/zipalign" -f -p 4 "$out/base.apk" "$out/aligned.apk"
 
 ks="${YOKAI4_KEYSTORE:-$HOME/.android/debug.keystore}"

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Yo-kai Watch 4: the first APK is only a NativeActivity (the runtime in libyokai4.so, android_main), with no Java. The
+<!-- Yo-kai Watch 4: the first APK is a NativeActivity (the runtime in libyokai4.so, android_main) plus one Java class (TextInput: the text box for the game's keyboard). The
      runtime asks for all-files access itself and reads the player's own data from Internal storage/Yo-kai Watch 4:
      exefs/, extract/romfs/, spirv/ and an optional config.txt (see games/yokai4/NOTES.md). A launcher with options
      (as games/p5r/java) can come later. The APK holds no game code, data or keys. -->
@@ -20,7 +20,7 @@
     <application
         android:label="Yo-kai Watch 4"
         android:requestLegacyExternalStorage="true"
-        android:hasCode="false"
+        android:hasCode="true"
         android:extractNativeLibs="true"
         android:debuggable="true"
         android:isGame="true"
