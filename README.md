@@ -1,6 +1,6 @@
-# Persona 5 Royal for Android (native port)
+# Yo-kai Watch 4 / 妖怪ウォッチ4 ぼくらは同じ空を見上げている for Android (native port)
 
-An Android app that runs **your own copy** of Persona 5 Royal (Nintendo Switch, version 1.0.0) natively on an arm64
+An Android app that runs **your own copy** of Yo-kai Watch 4 / 妖怪ウォッチ4 ぼくらは同じ空を見上げている (Nintendo Switch, version 1.0.0) natively on an arm64
 phone or tablet. The Switch's operating system services, its audio, video and input, and NVN (the Switch's graphics
 API) are reimplemented on Android, with Vulkan for the graphics. The game's own code runs directly on the phone's CPU:
 the Switch and Android phones share the same CPU architecture (AArch64).
@@ -14,23 +14,13 @@ prepare the game once (a few minutes), and play. The game is read from your file
 > legally dumped copy of the game (the base game, version 1.0.0) and your own `prod.keys`. How to dump them from your
 > console is **not** covered here. Please do not ask for game files or keys.
 
-Persona 5 Royal is © ATLUS / © SEGA. This is an unofficial fan project, not affiliated with or endorsed by ATLUS,
-SEGA or Nintendo.
-
-## Community and support
-
-- **Discord** (English and Spanish channels), for news, help and testing: https://discord.gg/rMgRneBTCe
-- **Support the developer (optional):** [GitHub Sponsors](https://github.com/sponsors/Brandon04Gonzalez). These ports
-  are free and made for preservation. Donating is entirely voluntary and helps with the costs of making them (test
-  devices, hardware, servers). Nothing is locked behind a donation.
+Yo-kai Watch 4 / 妖怪ウォッチ4 ぼくらは同じ空を見上げている is ©LEVEL-5 Inc. This is an unofficial fan project, not affiliated with or endorsed by LEVEL-5 or Nintendo.
 
 ## Install
 
-1. Copy your **Persona 5 Royal 1.0.0** `.nsp` (or `.xci`) and your `prod.keys` to the phone (the Download folder is
-   fine). The base game only: not the update.
-2. Install **P5R** from the [Releases](../../releases) page (allow installing apps from your browser or file manager
-   when Android asks).
-3. Open it and allow "All files access" (for its folder `Internal storage/Persona 5 Royal`: settings, saves, shaders).
+1. Copy your **Persona 5 Royal 1.0.0** `.nsp` (or `.xci`) and your `prod.keys` to the phone
+2. Install **ykw4** from the [Releases](../../releases) page
+3. Open it and allow "All files access" (for its folder `Internal storage/Yo-kai Watch 4`: settings, saves, shaders).
 4. **Game file → Choose**: pick your `.nsp`/`.xci`. **Keys → Choose**: pick your `prod.keys` (and `title.keys` too, if
    your dump needs it; you can select both). The app keeps the keys in its private storage; they are not uploaded or
    included in the APK.
@@ -39,8 +29,8 @@ SEGA or Nintendo.
 6. Press **Play**.
 
 Keep the game file where it is: every start reads the game from it. Saves are kept in
-`Internal storage/Persona 5 Royal/user/save`; the home screen can import and export them. Mods (LayeredFS style) can be
-placed in `Internal storage/Persona 5 Royal/mods/<ModName>/romfs/...` (see [docs/MODS.md](docs/MODS.md)).
+`Internal storage/Yo-kai Watch 4/user/save`; the home screen can import and export them. Mods (LayeredFS style) can be
+placed in `Internal storage/Yo-kai Watch 4/mods/<ModName>/romfs/...` (see [docs/MODS.md](docs/MODS.md)).
 
 ### Options
 
@@ -52,25 +42,10 @@ cap (30, or 60 experimental), shadows, FPS counter, **Fullscreen (stretch)**, **
 - An arm64 Android phone or tablet with **Android 10 or newer** and **Vulkan 1.1**, 6 GB of RAM or more (8 GB
   recommended).
 - Storage: the game file (about 15 GB) plus about 1 GB for the translated shaders and saves.
-- Your own dump of **Persona 5 Royal 1.0.0** (US `01005CA01580E000`, EU `01004B10157F2000`, JP `0100B880154FC000`, or Asia `01006BB00C6F0000`) and your console's `prod.keys`.
+- Your own dump of **Yo-kai Watch 4 1.0.0** (JP `0100B880154FC000`) and your console's `prod.keys`.
 
 ## Status
 
-The no-PC flow (selecting the game and keys, preparing shaders, and launching from the NSP) has been verified on **one
-device** so far:
-
-| Device | SoC / GPU | Results |
-|---|---|---|
-| Lenovo Tab M11 (Android 14, 8 GB) | Snapdragon 685 / Adreno 610, Vulkan 1.1 | menus 60 fps, 3D title ~14 fps, the casino ~20 fps |
-
-The Adreno 610 is a low-end GPU: on faster phones expect more. Other GPUs (Mali, PowerVR, Xclipse, newer Adreno) are
-untested. Reports are welcome (see [Reporting problems](#reporting-problems)).
-
-What works: the menus, films (hardware VP9), sound, cutscenes in sync, battles, saving and loading, 30 or 60 fps cap,
-touch controls (movable) and game controllers, the text language of your choice.
-
-Known limits: version 1.0.0 only (not the update); performance on low-end GPUs; the shadows option costs a lot on
-weak GPUs (off by default).
 
 ## How it works
 
@@ -93,27 +68,6 @@ That build is still there for debugging on Windows (`games/p5r/tools/build_pc.cm
 recompiled game code, so it is private by nature. The Android APK is the native build (`NX_NCE`), which holds no game
 code and can be shared. `games/p5r/tools/prepare_data.ps1` still prepares a data folder on a PC, for that build or
 for testing.
-
-## Building the APK
-
-On Windows, with the Android SDK (`ANDROID_HOME`, or Android Studio's default location; platform 35, build-tools
-35.0.0, NDK 28.2.13676358), a JDK 17+ (`JAVA_HOME`, or Android Studio's own), the Vulkan headers 1.4.357, and Docker
-Desktop (once, for the shader translator library):
-```powershell
-python -m venv private\venv; private\venv\Scripts\pip install cmake ninja
-git clone --depth 1 --branch v1.4.357 https://github.com/KhronosGroup/Vulkan-Headers private\third_party\Vulkan-Headers-1.4.357
-# the translator: Ryubing's source, then the library (NativeAOT for Android needs Linux: a Docker container)
-mkdir private\third_party\ryubing
-curl.exe -L -o private\third_party\ryubing.tar.gz https://codeberg.org/Software_arch/Ryubing/archive/a82350bb77.tar.gz
-tar -xzf private\third_party\ryubing.tar.gz -C private\third_party\ryubing --strip-components=1
-docker run --rm -v "${PWD}:/src" -w /src mcr.microsoft.com/dotnet/sdk:10.0 sh games/p5r/tools/build_harness_android.sh
-games\p5r\tools\build_android.cmd -Nce            # -> private\p5r\apk_nce\p5r.apk; -Install installs it with adb
-```
-The APK is signed with your Android debug key (`%USERPROFILE%\.android\debug.keystore`; Android Studio makes it, or
-`keytool -genkeypair -keystore %USERPROFILE%\.android\debug.keystore -storepass android -keypass android -alias
-androiddebugkey -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -validity 10000`). Without `-Nce` the script
-builds the recompiled flavour, which needs your own recompiled game code in `private\p5r\gen` (see `docs/RECOMP.md`)
-and must never be shared.
 
 ## Reporting problems
 
