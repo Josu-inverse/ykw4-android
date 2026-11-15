@@ -682,6 +682,45 @@ static void request_all_files_access(android_app* app) {
     if (env->ExceptionCheck()) env->ExceptionClear();
 }
 
+// Text input for the software keyboard applet (svc_am.cpp): a dialog with a text field, shown by the app's Java class
+// <package>.TextInput (games/<game>/java). Blocks the calling thread until the player confirms or cancels. Returns false
+// when the app has no such class (the game then gets the old empty answer), true otherwise; *cancelled tells which.
+extern "C" bool nx_android_text_input(const char* initial, int max_len, char* out, size_t out_size, bool* cancelled) {
+    *cancelled = true;
+    if (out_size) out[0] = 0;
+    android_app* app = nx::plat::g_app;
+    if (!app || !app->activity || !app->activity->vm) return false;
+    JNIEnv* env = nullptr;
+    if (app->activity->vm->AttachCurrentThread(&env, nullptr) != JNI_OK || !env) return false;
+    auto clear = [&] { if (env->ExceptionCheck()) env->ExceptionClear(); };
+    jobject activity = app->activity->clazz;
+    jclass actc = env->GetObjectClass(activity);
+    jmethodID get_loader = actc ? env->GetMethodID(actc, "getClassLoader", "()Ljava/lang/ClassLoader;") : nullptr;
+    jobject loader = get_loader ? env->CallObjectMethod(activity, get_loader) : nullptr;
+    clear();
+    jclass loaderc = loader ? env->GetObjectClass(loader) : nullptr;
+    jmethodID load = loaderc ? env->GetMethodID(loaderc, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;") : nullptr;
+    if (!load) { clear(); return false; }
+    const std::string cls = std::string(nx::game::kInfo.android_package) + ".TextInput";
+    jstring cname = env->NewStringUTF(cls.c_str());
+    auto textc = static_cast<jclass>(env->CallObjectMethod(loader, load, cname));
+    clear();
+    if (!textc) { nx::log("text input: class %s not in the APK", cls.c_str()); return false; }
+    jmethodID ask = env->GetStaticMethodID(textc, "ask", "(Landroid/app/Activity;Ljava/lang/String;I)Ljava/lang/String;");
+    if (!ask) { clear(); return false; }
+    jstring init = env->NewStringUTF(initial ? initial : "");
+    auto res = static_cast<jstring>(env->CallStaticObjectMethod(textc, ask, activity, init, jint(max_len)));
+    clear();
+    if (!res) return true;  // cancelled
+    const char* chars = env->GetStringUTFChars(res, nullptr);
+    if (chars) {
+        std::snprintf(out, out_size, "%s", chars);
+        env->ReleaseStringUTFChars(res, chars);
+        *cancelled = false;
+    }
+    return true;
+}
+
 #if NX_NCE
 static const char* const kDataProbe = "/exefs/main";  // native execution: the player's own exefs
 #else
