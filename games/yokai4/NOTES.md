@@ -87,8 +87,9 @@ Sin cubrir, a mirar con el primer log: `nn::ldn` (26), `nn::nfc` (13), `nn::swkb
 1b. [hecho] Botones táctiles de yokai4 en `runtime/src/touch_layout.cpp` (copia de la tabla de P5R; sin ella el juego
    no dibuja ningún botón).
 2. [hecho, ver arriba] Imports de `main` contra los `NX_HLE`; faltan ldn/nfc/swkbd/web/friends y 3 de fs.
-3. [hecho a medias] Shaders: `games/yokai4/tools/hbh1_shaders.py` (extractor offline, misma salida que `gsc_shaders.py`).
-   Solo probado con archivos sintéticos (`--selftest`); falta correrlo sobre el RomFS real y ver cuántos cumplen la regla.
+3. [hecho offline] Shaders: `games/yokai4/tools/hbh1_shaders.py` extrae 1245 bloques únicos (1670 archivos HBH1; 278 `.fxbin`
+   no son shaders) y el harness los traduce todos a SPIR-V: 988 ok + 257 ok-retry (la ruta de respaldo del harness), 0
+   invalid/exception/timeout, 13 compute. Falta comprobar en el móvil que el hash del runtime coincide con el de los `.spv`.
 4. Extractor de shaders de Yo-kai Watch 4 para el importador (reutilizar el lector CPK de
    `games/p5r/import/p5r_shaders.cpp`) y traducción Maxwell a SPIR-V con el harness de Ryujinx.
 5. Launcher Java, manifest, importador JNI (Title ID) y script de build del APK, a partir de los de P5R.
