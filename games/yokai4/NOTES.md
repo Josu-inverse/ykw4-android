@@ -112,3 +112,20 @@ u32@control+0x704 y el control está en el offset indicado. Los compute de Yo-ka
 el código empieza directo. Los `.fxbin` (278, sin HBH1) son otra cosa (tablas). `hbh1_shaders.py` usa ahora el prefacio;
 sin correrlo aún sobre el RomFS real tras este cambio. Pendiente: confirmar que el programa compute arranca en
 control+0x708 (el harness lo lee de ahí) y que el runtime hashea igual para esos shaders.
+
+## APK (primer arranque)
+
+`games/yokai4/AndroidManifest.xml` es solo un NativeActivity (`libyokai4.so`), sin Java ni importador en el móvil: el
+runtime pide por sí mismo el acceso a todos los archivos. Se compila con `games/yokai4/tools/build_android.sh` (SDK 35,
+NDK 28.2.13676358, build-tools 35.0.0, cmake, ninja, cabeceras Vulkan 1.4.357; ver `docs/BUILD.md`) y deja
+`private/yokai4/apk/yokai4.apk`. Se instala con `--install` (adb) o copiando el APK al móvil. Sin lanzador con opciones:
+los ajustes van en `config.txt` (líneas `NX_*`). Los diagnósticos van activados (`NX_DIAGNOSTICS=ON`).
+
+Datos en el móvil, en `Almacenamiento interno/Yo-kai Watch 4/` (el nombre es `game::kInfo.title`):
+
+- `exefs/`: `main`, `sdk`, `rtld` (y `main.npdm`) de tu dump.
+- `extract/romfs/`: el contenido del RomFS (la carpeta `data/` dentro).
+- `spirv/`: los `<hash>.spv` que salen del harness (solo los `.spv`).
+- `config.txt` (opcional), por ejemplo `NX_FPS_CAP=30`.
+
+El log queda en esa misma carpeta (`nx.log`, `nx.log.prev`).

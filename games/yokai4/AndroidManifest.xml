@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Yo-kai Watch 4: the first APK is only a NativeActivity (the runtime in libyokai4.so, android_main), with no Java. The
+     runtime asks for all-files access itself and reads the player's own data from Internal storage/Yo-kai Watch 4:
+     exefs/, extract/romfs/, spirv/ and an optional config.txt (see games/yokai4/NOTES.md). A launcher with options
+     (as games/p5r/java) can come later. The APK holds no game code, data or keys. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.yokai4recomp"
+    android:versionCode="1"
+    android:versionName="0.0.1"
+    android:installLocation="internalOnly">
+
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <application
+        android:label="Yo-kai Watch 4"
+        android:requestLegacyExternalStorage="true"
+        android:hasCode="false"
+        android:extractNativeLibs="true"
+        android:debuggable="true"
+        android:isGame="true"
+        android:appCategory="game"
+        android:largeHeap="true"
+        android:theme="@style/Fullscreen">
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape"
+            android:resizeableActivity="false"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density">
+            <meta-data android:name="android.app.lib_name" android:value="yokai4" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
