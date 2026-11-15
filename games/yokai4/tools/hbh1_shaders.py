@@ -58,22 +58,20 @@ def parse(data):
     if s_off + s_size > len(data) or s_size < 0x20 + 0x880:
         return None, None, "seccion 3 fuera del archivo o pequena"
     sec = data[s_off:s_off + s_size]
-    ctl, i = [], sec.find(struct.pack("<I", CTRL))
-    while i != -1:
-        ctl.append(i)
-        i = sec.find(struct.pack("<I", CTRL), i + 1)
-    if len(ctl) != 1:
-        return None, None, f"{len(ctl)} magias de control"
-    c = ctl[0]
-    if c + 0x880 > len(sec):
-        return None, None, "control cortado"
-    if u32(sec, 0x20) not in CODES:
-        return None, None, "sin magia de codigo en +0x20"
-    size = u32(sec, c + 0x704)
-    if not 0 < size <= c - 0x20:
-        return None, None, "tamano de codigo fuera de rango"
-    return s_off + 0x20, s_off + c, {"size": size, "exact": size == c - 0x20, "tail": len(sec) - (c + 0x880),
-                                    "compute": u32(sec, 0x20) == 0x12345679}
+    # Prefacio de 0x20 bytes (informe6): "NXGL", u32 1, u32 offset del codigo (0x20), u32 tamano del codigo,
+    # u32 offset del control, u32 tamano del resto, 2 x u32 0.
+    if sec[:4] != b"NXGL" or u32(sec, 4) != 1:
+        return None, None, "sin prefacio NXGL"
+    co, size, c = u32(sec, 8), u32(sec, 0xc), u32(sec, 0x10)
+    if size == 0 or co + size > c or c + 0x880 > len(sec):
+        return None, None, "offsets del prefacio fuera de rango"
+    if u32(sec, c) != CTRL:
+        return None, None, "sin magia de control en el offset del prefacio"
+    if u32(sec, c + 0x704) != size:
+        return None, None, "tamano del prefacio != u32@control+0x704"
+    gfx = u32(sec, co) in CODES  # los graficos llevan la cabecera NVN (0x12345678); el compute de Yo-kai, codigo directo
+    return s_off + co, s_off + c, {"size": size, "exact": co + size == c, "tail": len(sec) - (c + 0x880),
+                                  "compute": u32(sec, co) == 0x12345679, "header": gfx}
 
 
 def extract_file(group, name, data, gdir, seen, stage_of, rows):
@@ -122,11 +120,12 @@ def selftest():
     import tempfile
 
     def make(code_size, trail=5, magic=0x12345678, ctrl_extra=0, nctrl=1):
-        code = struct.pack("<I", magic) + bytes(range(1, 0x2c + 1)) + os.urandom(code_size - 0x30)
+        code = (struct.pack("<I", magic) + bytes(range(1, 0x2c + 1)) if magic else bytes(0x30)) + os.urandom(code_size - 0x30)
         ctrl = bytearray(0x880)
         struct.pack_into("<I", ctrl, 0, CTRL)
         struct.pack_into("<I", ctrl, 0x704, code_size)
-        sec = bytes(0x20) + code + bytes(ctrl_extra) + bytes(ctrl) * nctrl + bytes(trail)
+        pre = b"NXGL" + struct.pack("<IIII", 1, 0x20, code_size, 0x20 + code_size + ctrl_extra) + bytes(12)
+        sec = pre + code + bytes(ctrl_extra) + bytes(ctrl) * nctrl + bytes(trail)
         hdr = bytearray(0x40)
         hdr[:4] = b"HBH1"
         struct.pack_into("<II", hdr, 4, 0x40, 0)
@@ -137,14 +136,14 @@ def selftest():
         return bytes(hdr) + bytes(0x30) + sec + bytes(0x10)
 
     with tempfile.TemporaryDirectory() as t:
-        good = [("g", "a.fsb", make(0x100)), ("g", "b.csb", make(0x200, magic=0x12345679)),
+        good = [("g", "a.fsb", make(0x100)), ("g", "b.csb", make(0x200, magic=0)),
                 ("g", "c.vsb", make(0x180, ctrl_extra=8))]
-        bad = [("g", "d", make(0x100, nctrl=2)), ("g", "e", b"HBH1" + bytes(0x100)), ("g", "f", make(0x100)[:0x200])]
+        bad = [("g", "g", make(0x100, magic=0)[:0x300]), ("g", "d", make(0x100, nctrl=2)), ("g", "e", b"HBH1" + bytes(0x100)), ("g", "f", make(0x100)[:0x200])]
         r = run(good + bad, t, stage_of_default, False)
-        assert r["exacto"] == 2 and r["ok-no-exacto"] == 1, r
-        assert r["2 magias de control"] == 1 and sum(r.values()) == 6, r
+        assert r["exacto"] == 3 and r["ok-no-exacto"] == 1, r
+        assert sum(r.values()) == 7, r
         rows = open(os.path.join(t, "g", "manifest.tsv")).read().splitlines()
-        assert len(rows) == 4 and "compute" in rows[2], rows
+        assert len(rows) == 5, rows
         code = open(os.path.join(t, "g", rows[1].split("\t")[11]), "rb").read()
         assert len(code) == 0x100 and struct.unpack_from("<I", code)[0] == 0x12345678
     print("selftest OK")
