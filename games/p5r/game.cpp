@@ -26,9 +26,13 @@ uint64_t presents_recorded();  // runtime nvn_state.cpp: nvnQueuePresentTexture 
 void linear_write_back_pause(bool paused);  // runtime nvn_draw.cpp: no copies of linear targets back to memory
 }
 
+// The builds this port supports, one per region (1.0.0, the base game without the update): US, EU, JP and Asia.
+static const char* const kKnownBuilds[] = {"708BCACA873EA32B", "B78A03E489E5BD92", "6E1F4CAE92A28C91",
+                                           "2F2253ACD6BE5D87", nullptr};
+
 const game::Info game::kInfo = {"p5r", "Persona 5 Royal", 0x01005CA01580E000ull, "io.github.p5rrecomp",
                                 "private/p5r", 0 /* main.npdm: no system resource (SDK 13) */,
-                                "708BCACA873EA32B" /* 1.0.0, the base game without the update */};
+                                "708BCACA873EA32B" /* 1.0.0 US, the base game without the update */, kKnownBuilds};
 
 namespace {
 

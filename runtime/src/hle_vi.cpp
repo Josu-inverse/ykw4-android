@@ -89,6 +89,12 @@ void GetDisplayVsyncEvent(CPU& c) {  // (os::SystemEventType*, Display*)
 NX_HLE("_ZN2nn2vi10InitializeEv", ok);
 NX_HLE("_ZN2nn2vi18OpenDefaultDisplayEPPNS0_7DisplayE", OpenDefaultDisplay);
 NX_HLE("_ZN2nn2vi11CreateLayerEPPNS0_5LayerEPNS0_7DisplayE", CreateLayer);
+// SDK 7 (Yo-kai Watch 4): CreateLayer(Layer**, Display*, int width, int height); the size is ignored here as well.
+NX_HLE("_ZN2nn2vi11CreateLayerEPPNS0_5LayerEPNS0_7DisplayEii", CreateLayer);
+// Shutdown-time calls the sdk would send to vi:u, which the runtime does not provide.
+NX_HLE("_ZN2nn2vi12CloseDisplayEPNS0_7DisplayE", ok);
+NX_HLE("_ZN2nn2vi12DestroyLayerEPNS0_5LayerE", ok);
+NX_HLE("_ZN2nn2vi8FinalizeEv", ok);
 NX_HLE("_ZN2nn2vi15GetNativeWindowEPPvPNS0_5LayerE", GetNativeWindow);
 NX_HLE("_ZN2nn2vi20GetDisplayVsyncEventEPNS_2os15SystemEventTypeEPNS0_7DisplayE", GetDisplayVsyncEvent);
 NX_HLE("_ZN2nv20SetGraphicsAllocatorEPFPvmmS0_EPFvS0_S0_EPFS0_S0_mS0_ES0_", nv_noop);

@@ -81,6 +81,9 @@ struct Layout {
 const Layout kLayouts[] = {
     {"wonder", kWonder, std::size(kWonder), false, kY, 0.15f, 0.72f},
     {"p5r", kP5R, std::size(kP5R), true, 0, 0.15f, 0.76f},
+    // Yo-kai Watch 4 starts from P5R's table: the standard Switch buttons, and the right stick moves the camera in
+    // the field. Adjust once there is a build to play (the launcher's editor moves every button anyway).
+    {"yokai4", kP5R, std::size(kP5R), true, 0, 0.15f, 0.76f},
 };
 
 const Layout* layout() {

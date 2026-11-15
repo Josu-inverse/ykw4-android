@@ -224,21 +224,21 @@ void boot() {
             std::snprintf(hex, sizeof hex, "%02X", b);
             have += hex;
         }
-        const char* known_builds[] = {
-            "708BCACA873EA32B", "B78A03E489E5BD92", "6E1F4CAE92A28C91", "2F2253ACD6BE5D87"
-        };
+        // The game lists the builds it supports (game::Info::known_builds); without a list, only main_build_id.
+        const char* const single[] = {want, nullptr};
+        const char* const* builds = game::kInfo.known_builds ? game::kInfo.known_builds : single;
         bool known = false;
-        for (const char* k : known_builds) {
-            if (have.compare(0, std::strlen(k), k) == 0) { known = true; break; }
+        for (const char* const* k = builds; *k; k++) {
+            if (have.compare(0, std::strlen(*k), *k) == 0) { known = true; break; }
         }
         bool allow_any = std::getenv("NX_ALLOW_ANY_BUILD") || std::getenv("NX_IGNORE_VERSION");
         if (known) {
-            log("p5r: main build %s recognized and supported", have.c_str());
+            log("%s: main build %s recognized and supported", game::kInfo.id, have.c_str());
         } else if (allow_any) {
-            log("p5r: main build %s allowed by NX_ALLOW_ANY_BUILD switch", have.c_str());
+            log("%s: main build %s allowed by NX_ALLOW_ANY_BUILD switch", game::kInfo.id, have.c_str());
         } else {
-            fatal("exefs/main is build %s, not %s: this port is made for Persona 5 Royal 1.0.0 (US, EU, JP, or Asia). Set NX_ALLOW_ANY_BUILD=1 to override.",
-                  have.c_str(), want);
+            fatal("exefs/main is build %s, not %s: this port is made for another version of %s. Set NX_ALLOW_ANY_BUILD=1 to override.",
+                  have.c_str(), want, game::kInfo.title);
         }
     }
 

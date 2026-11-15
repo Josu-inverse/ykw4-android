@@ -18,6 +18,9 @@ struct Info {
     // Native execution (NX_NCE): the start of the build ID (hex) the game's glue is made for, checked against the
     // player's exefs/main (the hooks and offsets in game.cpp are those of one version). Null: any.
     const char* main_build_id = nullptr;
+    // Native execution: every build ID prefix (hex, uppercase) the port accepts, e.g. one per region, ended by a null
+    // entry. Null: only main_build_id is accepted.
+    const char* const* known_builds = nullptr;
 };
 extern const Info kInfo;
 
