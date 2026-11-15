@@ -102,3 +102,12 @@ Sección 3 = [prefacio de 0x20 bytes][código, magia 0x12345678 (gráfico) o 0x1
 0x98761234, 0x880 bytes][cola sin explicar]. Tamaño del código = u32 en control+0x704. El "no hay magia de código" de
 los `.csb` era un fallo del sondeo (solo buscaba 0x12345678). El extractor descarta y cuenta los archivos que no cumplen
 la regla; `--stats` imprime el resumen. Ejecutar: `python games/yokai4/tools/hbh1_shaders.py --romfs RUTA/romfs --out RUTA/salida --stats`.
+
+## Shaders HBH1: corrección con informe6 (compute)
+
+La sección 3 empieza con un prefacio "NXGL" de 0x20 bytes: u32 1, u32 offset del código (0x20), u32 tamaño del código,
+u32 offset del control, u32 (resto), 0, 0. Verificado a mano en los 13 `.csb`: el tamaño del prefacio coincide con
+u32@control+0x704 y el control está en el offset indicado. Los compute de Yo-kai NO llevan la cabecera NVN 0x12345679:
+el código empieza directo. Los `.fxbin` (278, sin HBH1) son otra cosa (tablas). `hbh1_shaders.py` usa ahora el prefacio;
+sin correrlo aún sobre el RomFS real tras este cambio. Pendiente: confirmar que el programa compute arranca en
+control+0x708 (el harness lo lee de ahí) y que el runtime hashea igual para esos shaders.
