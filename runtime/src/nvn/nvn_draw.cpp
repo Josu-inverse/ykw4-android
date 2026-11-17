@@ -854,7 +854,10 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
         }
         bool q = zero_draws_on() && zero_draws_begin(cb, vs->hash + " " + (fs ? fs->hash : std::string("-")));
         const int32_t oq = occlusion_query_begin(cb);  // P5R's occlusion culling (nvn_occlusion.cpp)
-        if (!occlusion_draw(cb, true, count, uint32_t(std::max(1, c.i[3])), 0, c.i[1], uint32_t(c.i[2])))
+        if (mode == 7) {  // NVN QUADS: (i0 i1 i2 i3) as the fan (i0 i1 i2) (i0 i2 i3), one draw per quad
+            for (uint32_t k = 0; k + 4 <= count; k += 4)
+                p_vkCmdDrawIndexed(cb, 4, uint32_t(std::max(1, c.i[3])), k, c.i[1], uint32_t(c.i[2]));
+        } else if (!occlusion_draw(cb, true, count, uint32_t(std::max(1, c.i[3])), 0, c.i[1], uint32_t(c.i[2])))
             p_vkCmdDrawIndexed(cb, count, uint32_t(std::max(1, c.i[3])), 0, c.i[1], uint32_t(c.i[2]));
         occlusion_query_end(cb, oq);
         if (q) zero_draws_end(cb);
@@ -862,7 +865,10 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
         bool q = zero_draws_on() && zero_draws_begin(cb, vs->hash + " " + (fs ? fs->hash : std::string("-")));
         const int32_t oq = occlusion_query_begin(cb);
         const uint32_t vcount = exp_draw && exp3d == 2 ? std::min(uint32_t(c.i[1]), 3u) : uint32_t(c.i[1]);
-        if (!occlusion_draw(cb, false, vcount, uint32_t(std::max(1, c.i[3])), uint32_t(c.i[0]), 0, uint32_t(c.i[2])))
+        if (mode == 7) {  // NVN QUADS: each 4 vertices as one fan, one draw per quad
+            for (uint32_t k = 0; k + 4 <= vcount; k += 4)
+                p_vkCmdDraw(cb, 4, uint32_t(std::max(1, c.i[3])), uint32_t(c.i[0]) + k, uint32_t(c.i[2]));
+        } else if (!occlusion_draw(cb, false, vcount, uint32_t(std::max(1, c.i[3])), uint32_t(c.i[0]), 0, uint32_t(c.i[2])))
             p_vkCmdDraw(cb, vcount, uint32_t(std::max(1, c.i[3])), uint32_t(c.i[0]), uint32_t(c.i[2]));
         occlusion_query_end(cb, oq);
         if (q) zero_draws_end(cb);
@@ -884,8 +890,59 @@ bool draw(VkCommandBuffer cb, const Targets& t, uint32_t mode, bool indexed, con
                       ((fs && snap_fs.find(fs->hash) != std::string::npos) ||
                        snap_fs.find(vs->hash) != std::string::npos) &&
                       ++snap_count;  // the vertex shader's hash matches too
+    // A file snap_fs.txt in the data folder (fragment shader hashes, any separators): read once, deleted, and the next 24
+    // draws with one of those shaders are snapshot (frames/00000_<draw in hex>.ppm, RGBA8: values above 1 clip). Made
+    // while playing, so the frame wanted need not be known in advance. nx.log: "snapfs: draw ... fs ... target WxH".
+    bool live_hit = false;
+    {
+        static std::string live_snap;
+        static std::set<std::string> per_hash;  // "<hash>/<n>": at most 2 draws per shader
+        static std::set<uint64_t> shown;       // scene-sized input textures already snapshot
+        static int live_left = 0;
+        static uint64_t next_snap_check = 0;
+        const uint64_t f = g_frame.load();
+        if (plat::kDiagnostics && f >= next_snap_check) {
+            next_snap_check = f + 30;
+            const std::string path = plat::data_root() + "/snap_fs.txt";
+            if (FILE* file = plat::fopen_utf8(path, "rb")) {
+                char words[1024] = {};
+                std::fread(words, 1, sizeof words - 1, file);
+                std::fclose(file);
+                std::remove(path.c_str());
+                live_snap = words, live_left = 24, per_hash.clear(), shown.clear();
+                log("snapfs: armed at frame %llu: %s", (unsigned long long)f, words);
+            }
+        }
+        if (live_left > 0 && fs && live_snap.find(fs->hash) != std::string::npos && !per_hash.count(fs->hash + "/2") && t.color_count &&
+            t.colors[0]) {
+            per_hash.insert(fs->hash + (per_hash.count(fs->hash + "/1") ? "/2" : "/1"));
+            live_left--, snap_by_fs = true, live_hit = true;
+            if (const GpuImage* img = image_of(t.colors[0]))
+                log("snapfs: draw %llx fs %s target %ux%u, %u colour targets", (unsigned long long)g_stats.done, fs->hash.c_str(),
+                    img->width, img->height, t.color_count);
+
+            // Every scene-sized (>= 1056 wide) rendered texture this draw samples: its input masks. Once per texture and arming.
+            for (size_t k = 0; k < g_textures.bindings.size() && k < g_textures.handles.size(); k++) {
+                uint64_t texture = 0;
+                SamplerInfo si;
+                texture_for(g_textures.handles[k], texture, si);
+                const Texture* tx = texture ? get<Texture>(texture) : nullptr;
+                if (!tx || !tx->image || !tx->image->rendered || tx->width < 1056 || !shown.insert(texture).second) continue;
+                log("snapfs:   input t%zu %llx: %ux%u f%x", k, (unsigned long long)texture, tx->width, tx->height, tx->format);
+                draw_end_rendering(cb, 6), debug_snapshot(cb, *tx->image, g_stats.done | (uint64_t(0x100 + k) << 32));
+            }
+        }
+    }
     if ((snap_by_fs || snap_follow(t, vs, fs, g_textures.handles) || debug_snap_wanted(g_stats.done)) && t.color_count && t.colors[0])
         if (GpuImage* snap = image_of(t.colors[0])) draw_end_rendering(cb, 6), debug_snapshot(cb, *snap, g_stats.done);
+    // The other colour targets of a live snapshot draw (snap_fs.txt): frames/00000_<k in the top 32 bits, draw>.ppm.
+    if (live_hit)
+        for (uint32_t k = 1; k < t.color_count && k < 8; k++)
+            if (t.colors[k])
+                if (GpuImage* snap = image_of(t.colors[k])) {
+                    log("snapfs:   target %u: %ux%u vk format %d", k, snap->width, snap->height, int(snap->format));
+                    draw_end_rendering(cb, 6), debug_snapshot(cb, *snap, g_stats.done | (uint64_t(k) << 32));
+                }
     // NX_DUMP_ON_TARGET=<hex NVNtexture*>: every NX_DUMP_FRAMES-th draw into it asks for NX_DUMP_TEXTURES to be read
     // back right after this submit (before later frames change them).
     static const char* dump_env = std::getenv("NX_DUMP_ON_TARGET");

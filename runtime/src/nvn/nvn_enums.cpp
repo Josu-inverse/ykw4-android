@@ -83,7 +83,8 @@ VkPrimitiveTopology vk_topology(uint32_t mode) {
         case 3: return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
         case 5: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
         case 6: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
-        default: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  // 4; 7 quads are split by the caller
+        case 7: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;  // NVN QUADS: nvn_draw.cpp draws each 4 vertices as one fan
+        default: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  // 4
     }
 }
 

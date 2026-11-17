@@ -328,6 +328,20 @@ void apply_write_back(const WriteBack& w) {
     static const bool whole = std::getenv("NX_WRITE_BACK_WHOLE") != nullptr;
     const uint64_t t0 = plat::monotonic_ns();
     g_wb_count++, g_wb_bytes += w.size;
+    // NX_WB_PROBE=1: the first words of every write-back, as the GPU made them and as guest memory held them (diagnosis:
+    // is the compute result a luminance that changes, or constant / zero / NaN?). One line per write-back, 3000 at most.
+    static const bool probe = std::getenv("NX_WB_PROBE") != nullptr;
+    static uint64_t probed = 0;
+    if (probe && probed < 3000 && w.size) {
+        probed++;
+        uint32_t g[4] = {}, m[4] = {}, b[4] = {};
+        std::memcpy(g, w.from, std::min<uint64_t>(16, w.size));
+        std::memcpy(m, w.to, std::min<uint64_t>(16, w.size));
+        if (w.before && w.before->size() >= 4) std::memcpy(b, w.before->data(), std::min<uint64_t>(16, w.before->size()));
+        log("wbprobe #%llu to %p size %llu gpu %08x %08x %08x %08x (%g %g) mem %08x %08x %08x %08x before %08x %08x",
+            (unsigned long long)probed, (void*)w.to, (unsigned long long)w.size, g[0], g[1], g[2], g[3],
+            *(float*)&g[0], *(float*)&g[1], m[0], m[1], m[2], m[3], b[0], b[1]);
+    }
     if (whole || !w.before || w.before->size() < w.size) {
         std::memcpy(w.to, w.from, w.size);
         g_wb_ns += plat::monotonic_ns() - t0;

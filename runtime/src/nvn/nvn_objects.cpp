@@ -302,6 +302,15 @@ void TextureInitialize(CPU& c) {  // NVNboolean (NVNtexture*, const NVNtextureBu
     t.pool = driver(c, "nvnTextureBuilderGetMemoryPool", {builder});
     t.offset = driver(c, "nvnTextureBuilderGetMemoryOffset", {builder});
     t.storage_size = texture_storage_size(c, builder);
+    // NX_TRACE_TEX_MEM=1: where every texture of at least 100x100 lives (pool, offset, size): render targets that share
+    // memory (a render graph's aliased targets) read each other's pixels on the console.
+    if (static const bool mem = std::getenv("NX_TRACE_TEX_MEM") != nullptr; mem && t.width >= 100 && t.height >= 100) {
+        static int n = 0;
+        if (n++ < 400)
+            log("texmem: %llx pool %llx offset %llx size %llx %ux%u f%x flags %x levels %u", (unsigned long long)guest,
+                (unsigned long long)t.pool, (unsigned long long)t.offset, (unsigned long long)t.storage_size, t.width,
+                t.height, t.format, t.flags, t.levels);
+    }
     uw_widen_texture(t);  // NX_ULTRAWIDE: screen-sized render targets get the display's width
     // NX_TRACE_TEX_CALLER=<w>x<h>: the guest call chain of every texture made at that size (who sizes the targets).
     if (static const char* e = std::getenv("NX_TRACE_TEX_CALLER"); e) {
