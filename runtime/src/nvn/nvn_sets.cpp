@@ -452,6 +452,13 @@ void build_sets(VkCommandBuffer cb, const std::vector<const ShaderInfo*>& shader
         const Range& r = b.nvn.index >= 0 && b.nvn.index < 16 ? g_state.storage[st][b.nvn.index] : Range{};
         p = r.address ? guest_bytes(r.address) : nullptr;
         size = p ? std::min<uint64_t>(r.size, 16ull << 20) : 0;
+        // Yo-kai Watch 4 binds its 64-float luminance partials (a 256-byte slot each) with size 4: the compute shaders
+        // index them with the thread id (06a04: one per 8x8 group, a0ce2/a474: 64 reads). Maxwell does not bound-check
+        // storage buffers, so the whole slot works there; here only the first float was copied and written back, the
+        // mean came out 64 times too low and the tonemap (7652f5...) blew the outdoors out. At least 256 bytes.
+        // NX_STORAGE_MIN=<bytes> (0: the bound size as before).
+        static const uint64_t min_size = std::getenv("NX_STORAGE_MIN") ? std::strtoull(std::getenv("NX_STORAGE_MIN"), nullptr, 0) : 256;
+        if (p && size && size < min_size) size = min_size;
         return s->stage == ShaderStage::Compute &&
                (all_write_backs() || (b.binding < 64 && written_storage_bindings(s) >> b.binding & 1));
     };

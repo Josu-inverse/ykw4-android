@@ -412,7 +412,14 @@ void draw_trace_line(const Targets& t, bool indexed, const Cmd& c, const ShaderI
                       (unsigned long long)v[0], (unsigned long long)v[2]);
         cond = b;
     }
-    verts = cond + verts;
+    std::string mrt;  // every colour target: pointer, colour mask and blend enable (the line above shows target 0 only)
+    for (uint32_t k = 0; k < t.color_count && k < 8; k++) {
+        char b[96];
+        std::snprintf(b, sizeof b, " mrt%u=%llx/m%x/b%u", k, (unsigned long long)t.colors[k], g_state.mask.mask[k],
+                      g_state.color.blend_enable[k]);
+        mrt += b;
+    }
+    verts = mrt + cond + verts;
     log("td: frame %llu draw %llu tgt %llx %ux%u f%x depth %llx f%x test %u write %u func %u stencil %u offset %u "
         "(%g %g %g) blend %u (%u %u %u %u) eq %u %u mask %x sc %d %d %d %d alpha %u vp %d %d %d %d vs %s fs %s %s %d%s |%s",
         (unsigned long long)g_frame.load(), (unsigned long long)g_stats.done, (unsigned long long)t.colors[0],
