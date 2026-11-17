@@ -15,9 +15,10 @@
 
 namespace nx {
 
-// One build so far: the base game, version and region of the dump this port was started from. More regions go here
-// as their build IDs are known (tools/yokai_probe.py prints main_build_id).
-static const char* const kKnownBuilds[] = {"E2630E9B82591048", nullptr};
+// The base game (version and region of the dump this port was started from) and its update (the patched `main`, read
+// from the update NSP). The hooks go by symbol name, so both run the same glue. More builds go here as their build IDs
+// are known (tools/yokai_probe.py prints main_build_id).
+static const char* const kKnownBuilds[] = {"E2630E9B82591048", "C7DAB27F22ACD2ED", nullptr};
 
 const game::Info game::kInfo = {"yokai4", "Yo-kai Watch 4", 0x010086C00AF7C000ull, "io.github.yokai4recomp",
                                 "private/yokai4", 0 /* main.npdm: system_resource_size 0 (no VAMM) */,

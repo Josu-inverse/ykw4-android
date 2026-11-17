@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Yo-kai Watch 4: the first APK is a NativeActivity (the runtime in libyokai4.so, android_main) plus one Java class (TextInput: the text box for the game's keyboard). The
-     runtime asks for all-files access itself and reads the player's own data from Internal storage/Yo-kai Watch 4:
-     exefs/, extract/romfs/, spirv/ and an optional config.txt (see games/yokai4/NOTES.md). A launcher with options
-     (as games/p5r/java) can come later. The APK holds no game code, data or keys. -->
+<!-- Yo-kai Watch 4: a NativeActivity (the runtime in libyokai4.so, android_main) behind a home screen with the options
+     (games/yokai4/java: Launcher.java, which writes config.txt). The player picks their own NSP/XCI and prod.keys there;
+     ImportActivity translates the shaders once and the runtime reads the game from the NSP as it is. Data in Internal
+     storage/Yo-kai Watch 4 (config.txt, spirv/, mods/, user/...), which needs all-files access. The APK holds no game
+     code, data or keys. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.github.yokai4recomp"
-    android:versionCode="1"
-    android:versionName="0.0.1"
+    android:versionCode="2"
+    android:versionName="0.1.0"
     android:installLocation="internalOnly">
 
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
@@ -27,6 +28,35 @@
         android:appCategory="game"
         android:largeHeap="true"
         android:theme="@style/Fullscreen">
+        <!-- Home screen: data check, options (config.txt), then the game. -->
+        <activity
+            android:name=".Launcher"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.NoActionBar"
+            android:screenOrientation="sensorLandscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Prepares the game once: reads the player's NSP with their keys and translates its shaders (libyokai4import.so with
+             libspirvharness.so, the shader translator). Its own process, so the translator's runtime never shares
+             the game's. -->
+        <activity
+            android:name=".ImportActivity"
+            android:exported="false"
+            android:process=":import"
+            android:theme="@android:style/Theme.Material.NoActionBar"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
+        <!-- Where the on-screen controls go (NX_TOUCH_LAYOUT), full screen like the game. -->
+        <activity
+            android:name=".ControlsEditor"
+            android:exported="false"
+            android:theme="@style/Fullscreen"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
+        <!-- The game. Exported: test runs can start it directly. -->
         <activity
             android:name="android.app.NativeActivity"
             android:exported="true"
@@ -34,10 +64,11 @@
             android:resizeableActivity="false"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|density">
             <meta-data android:name="android.app.lib_name" android:value="yokai4" />
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
         </activity>
+            <provider
+            android:name=".LogProvider"
+            android:authorities="io.github.yokai4recomp.logprovider"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>
