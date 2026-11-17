@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Android build of Yo-kai Watch 4, native execution: cmake (NDK) -> libyokai4.so -> aapt2 -> zipalign -> apksigner ->
-# private/yokai4/apk/yokai4.apk. One Java class (TextInput) and no on-device importer: the shaders are translated on the PC beforehand
-# (games/yokai4/tools/hbh1_shaders.py + the spirv_harness, see games/yokai4/NOTES.md) and copied to the phone with the
-# exefs and the RomFS.
+# Android build of Yo-kai Watch 4, native execution: cmake (NDK) -> libyokai4.so + libyokai4import.so (+ the prebuilt
+# libspirvharness.so, the shader translator) -> aapt2 -> javac/d8 -> zipalign -> apksigner -> private/yokai4/apk/yokai4.apk.
+# The APK has the launcher (games/yokai4/java: pick the NSP and prod.keys, options, mods, FPS counter) and the on-device
+# importer that translates the game's shaders once; the game is read from the player's NSP as it is.
+#
+# The shader translator is built once from the repository root (the same one P5R uses):
+#   docker run --rm -v "$PWD:/src" -w /src mcr.microsoft.com/dotnet/sdk:10.0 sh games/p5r/tools/build_harness_android.sh
 #
 # Needs the Android SDK (ANDROID_HOME or ANDROID_SDK_ROOT) with NDK 28.2.13676358, build-tools 35.0.0 and platform
 # android-35, cmake, ninja, zip, and the Vulkan headers 1.4.357 (VULKAN_SDK, or private/third_party/Vulkan-Headers-1.4.357,
@@ -15,7 +18,7 @@ install=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --install) install=1; shift ;;
-        -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -50,13 +53,21 @@ if [ "$configure" = 1 ]; then
         -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_static \
         -DNX_GAME=yokai4 -DNX_NCE=ON -DNX_DIAGNOSTICS=$diag
 fi
-cmake --build "$build" --target yokai4
+harness="$root/private/build/spirv_harness_android/libspirvharness.so"
+if [ ! -f "$harness" ]; then
+    echo "missing $harness" >&2
+    echo "build it once from the repository root: docker run --rm -v \"$root:/src\" -w /src mcr.microsoft.com/dotnet/sdk:10.0 sh games/p5r/tools/build_harness_android.sh" >&2
+    exit 1
+fi
+cmake --build "$build" --target yokai4 yokai4import
 
 host="$(uname -s | tr '[:upper:]' '[:lower:]')-x86_64"
 llvm="$ndk/toolchains/llvm/prebuilt/$host/bin"
 rm -rf "$out"
 mkdir -p "$out/lib/arm64-v8a"
 "$llvm/llvm-strip" --strip-unneeded -o "$out/lib/arm64-v8a/libyokai4.so" "$build/libyokai4.so"
+"$llvm/llvm-strip" --strip-unneeded -o "$out/lib/arm64-v8a/libyokai4import.so" "$build/libyokai4import.so"
+"$llvm/llvm-strip" --strip-unneeded -o "$out/lib/arm64-v8a/libspirvharness.so" "$harness"
 # libadrenotools' hook libraries (custom GPU drivers): found by name in nativeLibraryDir at run time; optional.
 for h in libhook_impl.so libmain_hook.so libfile_redirect_hook.so libgsl_alloc_hook.so; do
     f="$(find "$build" -name "$h" -print -quit)"
@@ -64,9 +75,18 @@ for h in libhook_impl.so libmain_hook.so libfile_redirect_hook.so libgsl_alloc_h
 done
 
 "$bt/aapt2" compile --dir "$root/android/res" -o "$out/res.zip"
-"$bt/aapt2" link -o "$out/base.apk" -I "$jar" --manifest "$root/games/yokai4/AndroidManifest.xml" "$out/res.zip"
+res_zips=("$out/res.zip")
+manifest="$root/games/yokai4/AndroidManifest.xml"
+icon_res="$root/games/yokai4/icon/res"
+if [ -d "$icon_res" ]; then
+    "$bt/aapt2" compile --dir "$icon_res" -o "$out/icon.zip"
+    res_zips+=("$out/icon.zip")
+    sed 's|<application|<application android:icon="@mipmap/ic_launcher"|' "$manifest" > "$out/AndroidManifest.xml"
+    manifest="$out/AndroidManifest.xml"
+fi
+"$bt/aapt2" link -o "$out/base.apk" -I "$jar" --manifest "$manifest" "${res_zips[@]}"
 (cd "$out" && zip -q -r -9 base.apk lib)
-# The one Java class (games/yokai4/java: TextInput, the text box for the game's keyboard).
+# The Java classes (games/yokai4/java: Launcher, ImportActivity, Importer, ControlsEditor, LogProvider, Lang, TextInput).
 mkdir -p "$out/classes" "$out/dex"
 find "$root/games/yokai4/java" -name '*.java' > "$out/sources.txt"
 javac -encoding UTF-8 -source 1.8 -target 1.8 -Xlint:-options -bootclasspath "$jar" -d "$out/classes" @"$out/sources.txt"

@@ -36,6 +36,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -1464,7 +1465,9 @@ int run_import(const std::vector<InputFile>& inputs, const Options& opt, std::st
 
 struct GameImage::Impl {
     std::vector<std::unique_ptr<Storage>> files;
-    std::unique_ptr<Nca> base;
+    std::unique_ptr<Nca> base, patch;  // patch: the update's program (its ExeFS and patched RomFS), when one was given
+    Storage* rom = nullptr;            // the patched RomFS section (owned by `patch`); its readers share buffers: `lock`
+    mutable std::mutex lock;
     uint64_t title = 0;
     std::map<std::string, std::vector<uint8_t>> exefs;
     // RomFS: section `sec` of `base`, its data level at `level_off` in the section, the file data at `data_off` in it
@@ -1475,6 +1478,11 @@ struct GameImage::Impl {
 
     // Bytes of the section's decrypted data at [pos, pos + n): no shared state, so any thread may read.
     void read_section(uint64_t pos, void* dst, size_t n) const {
+        if (rom) {
+            std::lock_guard<std::mutex> g(lock);
+            rom->read(pos, dst, n);
+            return;
+        }
         const Section& s = base->sec[sec];
         if (s.crypt() == 1) {
             base->file->read(s.off + pos, dst, n);
@@ -1586,40 +1594,52 @@ std::unique_ptr<GameImage> GameImage::open(const std::vector<InputFile>& inputs,
         uint64_t app = title_id & ~0xFFFull;
         for (auto& n : programs) {
             if (app && (n->title_id & ~0xFFFull) != app) continue;
-            bool patch = false, sparse = false;
+            bool patch = false;
             for (int i = 0; i < 4; i++)
-                if (n->sec[i].present && n->sec[i].partition() == 0) patch |= n->sec[i].is_patch(), sparse |= n->sec[i].is_sparse();
-            if (patch) continue;  // an update: the base game only
-            if (sparse) fail("%s holds only part of the game (an update-split title): not supported", n->name.c_str());
+                if (n->sec[i].present && n->sec[i].partition() == 0) patch |= n->sec[i].is_patch();
+            if (patch) {  // an update (the base game's patch NCA): its ExeFS and patched RomFS replace the base's
+                if (im.patch) fail("two updates in the files given (%s, %s): keep only one", im.patch->name.c_str(), n->name.c_str());
+                im.patch = std::move(n);
+                continue;
+            }
             if (im.base) fail("several games in the files given (%s, %s)", tid_str(im.base->title_id).c_str(), tid_str(n->title_id).c_str());
             im.base = std::move(n);
         }
         if (!im.base) fail(app ? "the files hold no base game of title %s" : "no base game found", tid_str(app).c_str());
         Nca& b = *im.base;
         if (!b.key_ok) fail("%s: %s", b.name.c_str(), b.key_problem.c_str());
+        if (im.patch && (im.patch->title_id & ~0xFFFull) != (b.title_id & ~0xFFFull))
+            fail("the update (%s) is for another game than the base (%s)", tid_str(im.patch->title_id).c_str(), tid_str(b.title_id).c_str());
+        if (im.patch && !im.patch->key_ok) fail("%s: %s", im.patch->name.c_str(), im.patch->key_problem.c_str());
+        int base_romfs = -1;
+        for (int i = 0; i < 4 && base_romfs < 0; i++)
+            if (b.sec[i].present && b.sec[i].partition() == 0) base_romfs = i;
+        if (base_romfs >= 0 && b.sec[base_romfs].is_sparse() && !im.patch)
+            fail("%s holds only part of the game (the rest comes with its update): add the update NSP", b.name.c_str());
         im.title = b.title_id;
+        Nca& e = im.patch ? *im.patch : b;  // the ExeFS comes from the update when there is one
 
         // ExeFS, checked block by block against its hash table (as the import does)
         int exe_sec = -1;
         for (int i = 0; i < 4 && exe_sec < 0; i++)
-            if (b.sec[i].present && b.sec[i].partition() == 1) exe_sec = i;
-        if (exe_sec < 0) fail("%s has no ExeFS", b.name.c_str());
-        Storage* exe = plain_section(b, exe_sec);
-        const uint8_t* efs = b.sec[exe_sec].fs;
+            if (e.sec[i].present && e.sec[i].partition() == 1) exe_sec = i;
+        if (exe_sec < 0) fail("%s has no ExeFS", e.name.c_str());
+        Storage* exe = plain_section(e, exe_sec);
+        const uint8_t* efs = e.sec[exe_sec].fs;
         uint32_t pfs_bs = rd32(efs + 0x28);
         uint64_t ht_off = rd64(efs + 0x30), ht_size = rd64(efs + 0x38), pfs_off = rd64(efs + 0x40), pfs_size = rd64(efs + 0x48);
-        if (!pfs_bs || ht_size > (64u << 20) || pfs_size > (1ull << 31)) fail("%s: implausible ExeFS layout", b.name.c_str());
+        if (!pfs_bs || ht_size > (64u << 20) || pfs_size > (1ull << 31)) fail("%s: implausible ExeFS layout", e.name.c_str());
         std::vector<uint8_t> ht(ht_size), pfs(pfs_size);
         exe->read(ht_off, ht.data(), ht.size());
         uint8_t d[32];
         sha256(ht.data(), ht.size(), d);
-        if (std::memcmp(d, efs + 0x8, 32) != 0) fail("%s: ExeFS hash table check failed (wrong key?)", b.name.c_str());
+        if (std::memcmp(d, efs + 0x8, 32) != 0) fail("%s: ExeFS hash table check failed (wrong key?)", e.name.c_str());
         exe->read(pfs_off, pfs.data(), pfs.size());
         for (uint64_t k = 0; k * pfs_bs < pfs_size; k++) {
             size_t m = size_t(std::min<uint64_t>(pfs_bs, pfs_size - k * pfs_bs));
             sha256(pfs.data() + k * pfs_bs, m, d);
             if ((k + 1) * 32 > ht.size() || std::memcmp(d, ht.data() + k * 32, 32) != 0)
-                fail("%s: ExeFS block %llu fails its check", b.name.c_str(), (unsigned long long)k);
+                fail("%s: ExeFS block %llu fails its check", e.name.c_str(), (unsigned long long)k);
         }
         struct Mem : Storage {
             const std::vector<uint8_t>& v;
@@ -1635,19 +1655,34 @@ std::unique_ptr<GameImage> GameImage::open(const std::vector<InputFile>& inputs,
             mem.read(f.off, out.data(), out.size());
         }
 
-        // RomFS: the IVFC data level, its header and tables (read once; the files are read on demand)
-        for (int i = 0; i < 4 && im.sec < 0; i++)
-            if (b.sec[i].present && b.sec[i].partition() == 0) im.sec = i;
-        if (im.sec < 0) fail("%s has no RomFS", b.name.c_str());
-        if (b.sec[im.sec].crypt() != 1 && b.sec[im.sec].crypt() != 3 && b.sec[im.sec].crypt() != 4)
+        // RomFS: the IVFC data level, its header and tables (read once; the files are read on demand). With an update:
+        // its patched section (indirect over the base's), read under a lock.
+        if (base_romfs < 0) fail("%s has no RomFS", b.name.c_str());
+        im.sec = base_romfs;
+        const uint8_t* romfs_fs = b.sec[im.sec].fs;
+        std::string romfs_name = b.name;
+        uint64_t romfs_size = b.sec[im.sec].size;
+        if (im.patch) {
+            Nca& pn = *im.patch;
+            int patch_romfs = -1;
+            for (int i = 0; i < 4 && patch_romfs < 0; i++)
+                if (pn.sec[i].present && pn.sec[i].partition() == 0) patch_romfs = i;
+            if (patch_romfs < 0) fail("%s has no patch RomFS", pn.name.c_str());
+            Storage* base_sec = b.sec[im.sec].is_sparse() ? sparse_section(b, im.sec) : plain_section(b, im.sec);
+            im.rom = patched_section(pn, patch_romfs, base_sec);
+            romfs_fs = pn.sec[patch_romfs].fs;
+            romfs_name = pn.name;
+            romfs_size = im.rom->size;
+        } else if (b.sec[im.sec].crypt() != 1 && b.sec[im.sec].crypt() != 3 && b.sec[im.sec].crypt() != 4) {
             fail("%s: RomFS encryption type %d is not handled", b.name.c_str(), b.sec[im.sec].crypt());
-        const uint8_t* iv = b.sec[im.sec].fs + 0x8;
-        if (rd32(iv) != 0x43465649) fail("%s: RomFS section without an IVFC header", b.name.c_str());
+        }
+        const uint8_t* iv = romfs_fs + 0x8;
+        if (rd32(iv) != 0x43465649) fail("%s: RomFS section without an IVFC header", romfs_name.c_str());
         uint32_t levels = rd32(iv + 0xC);
-        if (levels < 2 || levels > 7) fail("%s: IVFC with %u levels", b.name.c_str(), levels);
+        if (levels < 2 || levels > 7) fail("%s: IVFC with %u levels", romfs_name.c_str(), levels);
         const uint8_t* lv = iv + 0x10 + 0x18 * (levels - 2);
         im.level_off = rd64(lv), im.level_size = rd64(lv + 8);
-        if (im.level_off + im.level_size > b.sec[im.sec].size) fail("%s: RomFS lies outside its section", b.name.c_str());
+        if (im.level_off + im.level_size > romfs_size) fail("%s: RomFS lies outside its section", romfs_name.c_str());
         uint8_t rh[0x50];
         im.read_section(im.level_off, rh, sizeof rh);
         uint64_t dir_off = rd64(rh + 0x18), dir_size = rd64(rh + 0x20), file_off = rd64(rh + 0x38), file_size = rd64(rh + 0x40);

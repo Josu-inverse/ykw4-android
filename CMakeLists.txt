@@ -285,6 +285,16 @@ if(ANDROID AND NX_GAME STREQUAL "p5r")
     target_link_options(p5rimport PRIVATE -Wl,-z,max-page-size=16384)
 endif()
 
+# Yo-kai Watch 4's import on the phone (games/yokai4/import, ImportActivity): the same as P5R's, for the HBH1 shaders.
+if(ANDROID AND NX_GAME STREQUAL "yokai4")
+    add_library(yokai4import SHARED games/yokai4/import/yokai4_import_jni.cpp games/yokai4/import/yokai4_shaders.cpp
+        "${NX_IMPORTER_DIR}/nximport.cpp" "${NX_IMPORTER_DIR}/nxcrypto.cpp")
+    target_include_directories(yokai4import PRIVATE "${NX_IMPORTER_DIR}" games/yokai4/import)
+    target_compile_options(yokai4import PRIVATE -O2 -fvisibility=hidden -march=armv8-a+crypto)
+    target_link_libraries(yokai4import PRIVATE log dl)
+    target_link_options(yokai4import PRIVATE -Wl,-z,max-page-size=16384)
+endif()
+
 # NX_RELEASE: the runtime and the game's glue only (the recompiled game code does not change with it).
 if(NX_RELEASE)
     target_compile_definitions(${NX_GAME} PRIVATE NX_RELEASE)

@@ -58,6 +58,21 @@ void open_image() {
         if (f < 0) fatal("game: cannot open %s", path);
         in.push_back({shown, f});
     }
+    // The update (patch NSP), when one is given: NX_UPDATE_FD + NX_UPDATE_NAME, or NX_UPDATE_NSP (a path).
+    std::vector<int> owned;  // the update file opened here by path, closed after opening
+    const char* ufd = std::getenv("NX_UPDATE_FD");
+    const char* upath = std::getenv("NX_UPDATE_NSP");
+    if (ufd && *ufd) {
+        const char* uname = std::getenv("NX_UPDATE_NAME");
+        in.push_back({uname && *uname ? uname : "update.nsp", std::atoi(ufd)});
+        shown += " + update";
+    } else if (upath && *upath) {
+        int f = open_read(upath);
+        if (f < 0) fatal("game: cannot open the update %s", upath);
+        owned.push_back(f);
+        in.push_back({base_name(upath), f});
+        shown += " + update";
+    }
     std::vector<int> keys;  // read while opening, then closed
     const char* k = std::getenv("NX_KEYS");
     if (!k || !*k) fatal("game: NX_KEYS (the prod.keys file) is not set");
@@ -70,6 +85,7 @@ void open_image() {
     std::string err;
     g_image = nxi::GameImage::open(in, 0, err);
     for (int f : keys) close_fd(f);
+    for (int f : owned) close_fd(f);
     if (!g_image) fatal("game: %s could not be read: %s", shown.c_str(), err.c_str());
     log("game: %s read in place (title %016llx): %zu RomFS files, ExeFS %zu files", shown.c_str(),
         (unsigned long long)g_image->title_id(), g_image->file_count(), g_image->exefs().size());
