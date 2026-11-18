@@ -4,7 +4,7 @@ thread, and for the busiest thread (or --tid) the libraries its samples are in a
 (first frame in libwonder.so of each sample), symbolized with the NDK's llvm-symbolizer against the unstripped
 library (private/wonder/ba/libwonder.so).
 
-usage: android_profile_report.py <profile.txt> [--tid N] [--top 40]
+usage: android_profile_report.py <profile.txt> [--tid N] [--top 40] [--lib <unstripped .so>]
 """
 import argparse
 import collections
@@ -39,7 +39,11 @@ def main():
     ap.add_argument('profile')
     ap.add_argument('--tid')
     ap.add_argument('--top', type=int, default=40)
+    ap.add_argument('--lib', help='the unstripped library that ran (default private/wonder/ba/libwonder.so; Yo-kai: private/yokai4/ba/libyokai4.so)')
     a = ap.parse_args()
+    global LIB
+    if a.lib:
+        LIB = a.lib
     rows = [l.split() for l in open(a.profile) if l[:1].isdigit()]
     per_tid = collections.Counter(r[0] for r in rows)
     print('samples per thread:', ', '.join(f'{t}={n}' for t, n in per_tid.most_common(8)))
