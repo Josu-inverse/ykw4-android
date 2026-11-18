@@ -33,7 +33,9 @@ struct KThread : KObject {
     std::atomic<const char*> hle{nullptr};  // the HLE function it is in (for the stall report), null in guest code
     bool started = false, exited = false, cancel = false;
     // wait state (under the kernel lock)
-    bool wake = false;
+    std::atomic<bool> wake{false};  // read without the lock while spinning (kernel.cpp spin_wait)
+    std::atomic<bool> poke{false};  // WaitSynchronization: some waitable object changed
+    bool parked = false;            // really blocked in cv.wait (under the lock): only then is a futex wake needed
     uint32_t wait_result = 0;
     uint64_t wait_mutex = 0, wait_key = 0, wait_addr = 0;
     uint32_t wait_tag = 0;

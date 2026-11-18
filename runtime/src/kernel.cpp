@@ -70,7 +70,10 @@ void handle_close(uint32_t h) {
 // every waiting thread of the process on each signal (the engine's job system broadcasts all the time).
 void notify_all() {
     std::lock_guard lk(g_k);
-    for (KThread* t : g_sync_waiters) t->cv.notify_one();
+    for (KThread* t : g_sync_waiters) {
+        t->poke.store(true, std::memory_order_release);
+        if (t->parked) t->cv.notify_one();  // bionic's pthread_cond_signal is a syscall even with nobody waiting
+    }
 }
 
 KThread* self_thread() { return t_self; }
@@ -123,21 +126,70 @@ NX_HLE("_ZN2nn2os13GetSystemTickEv", hle_get_system_tick);
 
 // ---- waiting --------------------------------------------------------------------------------------------------
 
+// Spin before sleeping. The game's job system hands work between threads thousands of times per frame; with a futex
+// sleep/wake each hand-off costs 50-300 us on a phone (idle states, scheduler placement, low clocks because the
+// threads look idle), and the frame became a chain of those latencies while no core was busy (profile: 45% of the
+// workers' samples in notify_one). NX_SPIN_US = microseconds to spin on the flag before parking (default 80, 0 = off).
+static int64_t spin_ns() {
+    static const int64_t v = [] {
+        const char* e = std::getenv("NX_SPIN_US");
+        return (e ? std::atoll(e) : 80) * 1000;
+    }();
+    return v;
+}
+
+static inline void cpu_relax() {
+#if defined(__aarch64__)
+    asm volatile("yield" ::: "memory");
+#else
+    asm volatile("" ::: "memory");
+#endif
+}
+
+// Called with g_k held once (depth 1): drops it while spinning on `flag`, takes it back. True if the flag was seen.
+static bool spin_wait(std::unique_lock<std::recursive_mutex>& lk, std::atomic<bool>& flag, int64_t max_ns) {
+    int64_t budget = std::min(spin_ns(), max_ns < 0 ? spin_ns() : max_ns);
+    if (budget <= 0) return false;
+    lk.unlock();
+    uint64_t end = plat::monotonic_ns() + uint64_t(budget);
+    bool seen = false;
+    for (;;) {
+        for (int i = 0; i < 32; i++) {
+            if (flag.load(std::memory_order_acquire)) {
+                seen = true;
+                break;
+            }
+            cpu_relax();
+        }
+        if (seen || plat::monotonic_ns() >= end) break;
+    }
+    lk.lock();
+    return seen;
+}
+
 // Wait (with g_k held) until `self->wake` or timeout (ns, <0 = forever). Returns false on timeout.
 static bool block(std::unique_lock<std::recursive_mutex>& lk, KThread* self, int64_t timeout_ns) {
+    auto start = std::chrono::steady_clock::now();
+    if (!self->wake && spin_wait(lk, self->wake, timeout_ns)) return true;
+    if (self->wake) return true;
+    struct Parked {
+        KThread* t;
+        explicit Parked(KThread* x) : t(x) { t->parked = true; }
+        ~Parked() { t->parked = false; }
+    } parked(self);
     if (timeout_ns < 0) {
-        self->cv.wait(lk, [&] { return self->wake; });
+        self->cv.wait(lk, [&] { return self->wake.load(); });
         return true;
     }
-    auto until = std::chrono::steady_clock::now() + std::chrono::nanoseconds(timeout_ns);
-    return self->cv.wait_until(lk, until, [&] { return self->wake; });
+    auto until = start + std::chrono::nanoseconds(timeout_ns);
+    return self->cv.wait_until(lk, until, [&] { return self->wake.load(); });
 }
 
 // Wake a blocked thread (with g_k held).
 static void wake(KThread* t) {
-    t->wake = true;
     t->wait_result = 0;
-    t->cv.notify_one();
+    t->wake.store(true, std::memory_order_release);
+    if (t->parked) t->cv.notify_one();
 }
 
 static void remove(std::vector<KThread*>& v, KThread* t) { v.erase(std::remove(v.begin(), v.end(), t), v.end()); }
@@ -366,6 +418,18 @@ static uint32_t svc_wait_synchronization(CPU& c, uint64_t handles, int32_t count
             return 0;
         }
         if (timeout == 0) return 0xEA01;
+        // Spin first (see spin_ns): a signal after the check above needs g_k, so clearing poke here loses nothing.
+        self->poke.store(false, std::memory_order_relaxed);
+        int64_t left = timeout < 0 ? -1 : std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                              until - std::chrono::steady_clock::now()).count();
+        if (timeout >= 0 && left <= 0) return ready() >= 0 ? 0 : 0xEA01;
+        if (spin_wait(lk, self->poke, left)) continue;
+        struct Parked {
+            KThread* t;
+            explicit Parked(KThread* x) : t(x) { t->parked = true; }
+            ~Parked() { t->parked = false; }
+        } parked(self);
+        if (self->poke.load()) continue;
         if (timeout < 0)
             self->cv.wait(lk);
         else if (self->cv.wait_until(lk, until) == std::cv_status::timeout && ready() < 0)
