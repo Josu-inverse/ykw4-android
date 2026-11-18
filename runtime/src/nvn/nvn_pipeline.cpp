@@ -657,8 +657,26 @@ void pipeline_warm_step() {
     }
     if (!remaining) return;
     const uint64_t t0 = plat::monotonic_ns();
-    constexpr uint64_t kBudgetNs = 1000000;  // replay-thread time per submit spent preparing builds
-    for (size_t scanned = 0; scanned < std::min<size_t>(recs.size(), 64) && g_prewarm_inflight < 32; scanned++) {  // 64 lookups per submit: the shaders of other courses never load
+    // Replay-thread time per submit spent preparing builds, lookups per submit, builds in flight. Generous by default
+    // (a pipeline built here is a stutter that never happens in play; the work itself is on the pool threads).
+    // NX_PREWARM_BUDGET_US / NX_PREWARM_SCAN / NX_PREWARM_INFLIGHT override.
+    static const uint64_t kBudgetNs = [] {
+        const char* e = std::getenv("NX_PREWARM_BUDGET_US");
+        return uint64_t(e ? std::atoi(e) : 2500) * 1000;
+    }();
+    static const size_t kScan = [] {
+        const char* e = std::getenv("NX_PREWARM_SCAN");
+        return size_t(e ? std::atoi(e) : 512);
+    }();
+    static const size_t kInflight = [] {
+        const char* e = std::getenv("NX_PREWARM_INFLIGHT");
+        return size_t(e ? std::atoi(e) : 96);
+    }();
+    static uint64_t submits = 0;
+    if (++submits % 300 == 0)
+        log("nvn/vk: prewarm: %zu of %zu recorded pipelines still waiting (their shaders are not loaded yet)", remaining,
+            recs.size());
+    for (size_t scanned = 0; scanned < std::min<size_t>(recs.size(), kScan) && g_prewarm_inflight < kInflight; scanned++) {
         if (plat::monotonic_ns() - t0 > kBudgetNs) break;
         size_t i = cursor++ % recs.size();
         if (done[i]) continue;

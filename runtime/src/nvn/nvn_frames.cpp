@@ -404,6 +404,11 @@ bool pipelined() {
         const char* e = std::getenv("NX_PIPELINED");
 #if defined(__APPLE__)
         return !e || std::atoi(e) > 0;
+#elif defined(__ANDROID__)
+        // Phones: always pipelined unless NX_PIPELINED=0. The "integrated" test below is not reliable here: the first
+        // call can come before the Vulkan device is chosen (then the answer stuck at "no"), and Yo-kai Watch 4 ran
+        // synchronously (replay, then a wait for the whole GPU frame: 12.5 fps) until NX_PIPELINED=1 (18 fps).
+        return !e || std::atoi(e) > 0;
 #else
         // An integrated GPU shares the CPU's memory and is the long side of a frame: with the fences not waited for,
         // the Intel UHD went from 26.2 to 31.3 fps docked and 37.8 to 40.1 at 720p in the Flower Kingdom intro
