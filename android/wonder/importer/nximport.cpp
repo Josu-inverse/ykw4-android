@@ -1723,6 +1723,136 @@ std::unique_ptr<GameImage> GameImage::open(const std::vector<InputFile>& inputs,
     return nullptr;
 }
 
+std::vector<std::unique_ptr<GameImage>> GameImage::open_addons(const std::vector<InputFile>& inputs, uint64_t base_title,
+                                                               std::vector<std::string>& notes) {
+    std::vector<std::unique_ptr<GameImage>> out;
+    auto load_addon_romfs = [](Impl& im, Nca& b, int sec) {
+        im.sec = sec;
+        const uint8_t* iv = b.sec[sec].fs + 0x8;
+        if (rd32(iv) != 0x43465649) fail("%s: RomFS section without an IVFC header", b.name.c_str());
+        uint32_t levels = rd32(iv + 0xC);
+        if (levels < 2 || levels > 7) fail("%s: IVFC with %u levels", b.name.c_str(), levels);
+        const uint8_t* lv = iv + 0x10 + 0x18 * (levels - 2);
+        im.level_off = rd64(lv), im.level_size = rd64(lv + 8);
+        if (im.level_off + im.level_size > b.sec[sec].size) fail("%s: RomFS lies outside its section", b.name.c_str());
+        uint8_t rh[0x50];
+        im.read_section(im.level_off, rh, sizeof rh);
+        uint64_t dir_off = rd64(rh + 0x18), dir_size = rd64(rh + 0x20), file_off = rd64(rh + 0x38), file_size = rd64(rh + 0x40);
+        im.data_off = rd64(rh + 0x48);
+        if (rd64(rh) != 0x50 || dir_size > (64u << 20) || file_size > (64u << 20) || dir_off + dir_size > im.level_size ||
+            file_off + file_size > im.level_size)
+            fail("%s: the RomFS header does not decrypt (wrong title key?)", b.name.c_str());
+        std::vector<uint8_t> dirs(dir_size), filet(file_size);
+        im.read_section(im.level_off + dir_off, dirs.data(), dirs.size());
+        im.read_section(im.level_off + file_off, filet.data(), filet.size());
+        std::vector<RomfsFile> rf;
+        std::vector<std::string> rd;
+        walk_romfs(dirs, filet, 0, "", rf, rd, 0);
+        auto parent_of = [](const std::string& p) {
+            size_t s = p.rfind('/');
+            return s == std::string::npos ? std::string() : p.substr(0, s);
+        };
+        auto name_of = [](const std::string& p) {
+            size_t s = p.rfind('/');
+            return s == std::string::npos ? p : p.substr(s + 1);
+        };
+        im.entries[""] = GameImage::Entry{0, 0, true};
+        for (const std::string& dpath : rd) {
+            im.entries[dpath] = GameImage::Entry{0, 0, true};
+            im.kids[parent_of(dpath)].push_back(name_of(dpath));
+        }
+        for (const RomfsFile& f : rf) {
+            if (im.data_off + f.off + f.size > im.level_size) fail("RomFS: %s lies outside the image", f.path.c_str());
+            im.entries[f.path] = GameImage::Entry{f.off, f.size, false};
+            im.kids[parent_of(f.path)].push_back(name_of(f.path));
+        }
+    };
+    Keys keys;
+    uint8_t hk[32] = {};
+    try {
+        if (!crypto_self_test()) fail("internal error: crypto self-test failed");
+        bool have_prod = false;
+        for (const InputFile& in : inputs) {
+            std::string n = lower(in.name);
+            if (n == "prod.keys" || n == "keys.txt" || n == "keys.dat") {
+                FdStorage s(in.fd, in.name);
+                keys.load_prod(read_small(s, 1 << 20));
+                have_prod = true;
+            } else if (n == "title.keys") {
+                FdStorage s(in.fd, in.name);
+                keys.load_title(read_small(s, 4 << 20));
+            }
+        }
+        if (!have_prod) fail("prod.keys is missing");
+        if (!keys.header_key(hk)) fail("prod.keys has no header_key");
+    } catch (const Fail& e) {
+        notes.push_back(e.what());
+        return out;
+    }
+    std::map<uint64_t, std::string> seen;  // DLC id -> the file it came from
+    for (const InputFile& in : inputs) {
+        if (!ends_with(lower(in.name), ".nsp")) continue;
+        try {
+            std::unique_ptr<GameImage> g(new GameImage());
+            Impl& im = *g->impl_;
+            im.files.push_back(std::make_unique<FdStorage>(in.fd, in.name));
+            Storage* st = im.files.back().get();
+            std::vector<ContEntry> fl = read_pfs(st, 0, false, in.name);
+            std::map<std::string, Ticket> tickets;
+            for (const ContEntry& f : fl) {
+                if (!ends_with(lower(f.name), ".tik") || f.size < 0x2C0) continue;
+                uint8_t t[0x2C0];
+                st->read(f.off, t, sizeof t);
+                if (rd32(t) != 0x10004) continue;
+                Ticket tk;
+                std::memcpy(tk.enc_key, t + 0x180, 16);
+                tk.type = t[0x281];
+                tickets[hex(t + 0x2A0, 16)] = tk;
+                secure_zero(t, sizeof t);
+            }
+            for (const ContEntry& f : fl) {
+                std::string n = lower(f.name);
+                if (ends_with(n, ".ncz")) fail("compressed NCZ content is not supported; use an uncompressed NSP");
+                if (!ends_with(n, ".nca")) continue;
+                auto nca = open_nca(st, f.off, f.size, f.name, keys, hk, tickets);
+                if (nca && (nca->content_type == 4 || nca->content_type == 5) && !im.base)
+                    im.base = std::move(nca);  // 4 = Data, 5 = PublicData (what add-on content uses)
+            }
+            if (!im.base) {
+                notes.push_back(in.name + ": no add-on content inside (skipped)");
+                continue;
+            }
+            Nca& b = *im.base;
+            if (base_title && ((b.title_id - 0x1000) & ~0xFFFull) != (base_title & ~0xFFFull)) {
+                notes.push_back(in.name + ": add-on content of another game (" + tid_str(b.title_id) + ", skipped)");
+                continue;
+            }
+            if (auto d = seen.find(b.title_id); d != seen.end()) {
+                notes.push_back(in.name + ": same add-on content as " + d->second + " (skipped)");
+                continue;
+            }
+            if (!b.key_ok) fail("%s", b.key_problem.c_str());
+            int sec = -1;
+            for (int i = 0; i < 4 && sec < 0; i++)
+                if (b.sec[i].present && b.sec[i].partition() == 0) sec = i;
+            if (sec < 0) fail("no RomFS");
+            if (b.sec[sec].is_patch() || b.sec[sec].is_sparse()) fail("patched add-on content is not supported");
+            int c = b.sec[sec].crypt();
+            if (c != 1 && c != 3 && c != 4) fail("RomFS encryption type %d is not handled", c);
+            im.title = b.title_id;
+            load_addon_romfs(im, b, sec);
+            seen[b.title_id] = in.name;
+            out.push_back(std::move(g));
+        } catch (const Fail& e) {
+            notes.push_back(in.name + ": " + e.what() + " (skipped)");
+        } catch (const std::bad_alloc&) {
+            notes.push_back(in.name + ": out of memory (skipped)");
+        }
+    }
+    secure_zero(hk, sizeof hk);
+    return out;
+}
+
 bool nso_to_flat_image(const std::vector<uint8_t>& nso, std::vector<uint8_t>& out, std::string& error) {
     try {
         out = nso_to_flat(nso, "NSO");

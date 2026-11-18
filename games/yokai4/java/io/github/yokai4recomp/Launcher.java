@@ -20,6 +20,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.ParcelFileDescriptor;
+import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.system.Os;
@@ -94,7 +95,7 @@ public class Launcher extends Activity {
     final Map<String, String> config = new LinkedHashMap<>();
     TextView status;
     Button play;
-    static final int PICK_ZIP = 1, PICK_FOLDER = 2, PICK_GAME = 3, PICK_KEYS = 4, PICK_ICON = 5, PREPARE = 6, PICK_MOD = 7, PICK_DRIVER = 8, PICK_UPDATE = 9;
+    static final int PICK_ZIP = 1, PICK_FOLDER = 2, PICK_GAME = 3, PICK_KEYS = 4, PICK_ICON = 5, PREPARE = 6, PICK_MOD = 7, PICK_DRIVER = 8, PICK_UPDATE = 9, PICK_DLC = 10;
 
     String t(String spanish, String english) { return Lang.t(spanish, english); }
 
@@ -127,6 +128,34 @@ public class Launcher extends Activity {
     String updateUri() { return prefs().getString("upd_uri", null); }
 
     String updateName() { return updateUri() == null ? "" : prefs().getString("upd_name", ""); }
+
+    // The DLC folder (optional): a tree the player picked; every .nsp inside is add-on content, read in place at start.
+    String dlcUri() { return prefs().getString("dlc_uri", null); }
+
+    // [name, document uri] of each .nsp directly inside the DLC folder, sorted by name.
+    List<String[]> dlcFiles() {
+        List<String[]> out = new ArrayList<>();
+        String tree = dlcUri();
+        if (tree == null) return out;
+        try {
+            Uri t = Uri.parse(tree);
+            Uri kids = DocumentsContract.buildChildDocumentsUriUsingTree(t, DocumentsContract.getTreeDocumentId(t));
+            try (Cursor c = getContentResolver().query(kids, new String[] {
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_DOCUMENT_ID}, null, null, null)) {
+                while (c != null && c.moveToNext()) {
+                    String name = c.getString(0);
+                    if (name != null && name.toLowerCase(Locale.ROOT).endsWith(".nsp"))
+                        out.add(new String[] {name, DocumentsContract.buildDocumentUriUsingTree(t, c.getString(1)).toString()});
+                }
+            }
+        } catch (Exception ignored) {  // the folder is gone or its grant was revoked: no DLC
+        }
+        java.util.Collections.sort(out, new java.util.Comparator<String[]>() {
+            @Override
+            public int compare(String[] a, String[] b) { return a[0].compareToIgnoreCase(b[0]); }
+        });
+        return out;
+    }
 
     static File keysFile(Context c, String name) { return new File(new File(c.getFilesDir(), "keys"), name); }
 
@@ -261,6 +290,20 @@ public class Launcher extends Activity {
                 Os.unsetenv("NX_UPDATE_FD");
                 Os.unsetenv("NX_UPDATE_NAME");
             }
+            List<String[]> dlc = dlcFiles();
+            int opened = 0;
+            for (String[] d : dlc) {
+                try {
+                    ParcelFileDescriptor p = getContentResolver().openFileDescriptor(Uri.parse(d[1]), "r");
+                    if (p == null) continue;
+                    Os.setenv("NX_DLC_FD_" + opened, String.valueOf(p.detachFd()), true);
+                    Os.setenv("NX_DLC_NAME_" + opened, d[0], true);
+                    opened++;
+                } catch (Exception ignored) {  // one unreadable file does not stop the others
+                }
+            }
+            if (opened > 0) Os.setenv("NX_DLC_COUNT", String.valueOf(opened), true);
+            else Os.unsetenv("NX_DLC_COUNT");
             Os.setenv("NX_KEYS", keysFile(this, "prod.keys").getPath(), true);
             File tk = keysFile(this, "title.keys");
             if (tk.exists()) Os.setenv("NX_TITLE_KEYS", tk.getPath(), true);
@@ -397,6 +440,7 @@ public class Launcher extends Activity {
                     }
                 });
         addUpdateRow(root);
+        addDlcRow(root);
         addRow(root, t("Claves (prod.keys)", "Keys (prod.keys)"), t("Elegir", "Choose"), new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -625,6 +669,10 @@ public class Launcher extends Activity {
                 if (o.values[k].equals(v)) o.pick = k;
         }
         updateButtons(getWindow().getDecorView());
+        if (dlcLabel != null) {
+            if (dlcUri() == null) dlcLabel.setText(t("DLC (carpeta): ninguna", "DLC (folder): none"));
+            else dlcLabel.setText(Lang.f("DLC: %d archivos .nsp en la carpeta", "DLC: %d .nsp files in the folder", dlcFiles().size()));
+        }
         if (updateLabel != null)
             updateLabel.setText(updateUri() == null ? t("Actualización (.nsp): ninguna", "Update (.nsp): none")
                     : Lang.f("Actualización: %s", "Update: %s", updateName()));
@@ -698,6 +746,19 @@ public class Launcher extends Activity {
         if (request == PICK_UPDATE) {
             onUpdatePicked(data.getData());
             refresh();
+            return;
+        }
+        if (request == PICK_DLC) {
+            try {
+                getContentResolver().takePersistableUriPermission(data.getData(), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored) {
+            }
+            prefs().edit().putString("dlc_uri", data.getData().toString()).apply();
+            refresh();
+            if (dlcFiles().isEmpty())
+                tell(t("Carpeta sin DLC", "No DLC in that folder"),
+                        t("No hay archivos .nsp directamente dentro de esa carpeta.",
+                                "There are no .nsp files directly inside that folder."));
             return;
         }
         if (request == PICK_ICON) {
@@ -1098,7 +1159,46 @@ public class Launcher extends Activity {
         root.addView(row);
     }
 
-    TextView updateLabel;
+    TextView updateLabel, dlcLabel;
+
+    // The DLC folder: choose (every .nsp in it is read in place) or remove.
+    void addDlcRow(LinearLayout root) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(4), 0, dp(4));
+        dlcLabel = new TextView(this);
+        dlcLabel.setTextColor(Color.WHITE);
+        dlcLabel.setTextSize(17);
+        row.addView(dlcLabel, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Button choose = new Button(this);
+        choose.setAllCaps(false);
+        choose.setMinWidth(dp(88));
+        choose.setText(t("Elegir", "Choose"));
+        row.addView(choose);
+        Button remove = new Button(this);
+        remove.setAllCaps(false);
+        remove.setMinWidth(dp(88));
+        remove.setText(t("Quitar", "Remove"));
+        row.addView(remove);
+        choose.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                startActivityForResult(i, PICK_DLC);
+            }
+        });
+        remove.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                prefs().edit().remove("dlc_uri").apply();
+                refresh();
+            }
+        });
+        root.addView(row);
+    }
 
     void addRow(LinearLayout root, String label, String button, View.OnClickListener click) {
         LinearLayout row = new LinearLayout(this);

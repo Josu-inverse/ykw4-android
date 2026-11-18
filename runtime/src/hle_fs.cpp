@@ -72,9 +72,10 @@ struct File {
     FILE* f;
     std::string path;
     const nxi::GameImage::Entry* entry = nullptr;  // a RomFS file of the game image (f is null)
+    const nxi::GameImage* img = nullptr;           // the image `entry` belongs to (the game's, or a DLC's)
     const std::string* virt = nullptr;             // an in-memory virtual file (add_virtual_file; f is null)
     File(FILE* file, std::string p) : f(file), path(std::move(p)) {}
-    File(const nxi::GameImage::Entry* e, std::string p) : f(nullptr), path(std::move(p)), entry(e) {}
+    File(const nxi::GameImage::Entry* e, const nxi::GameImage* i, std::string p) : f(nullptr), path(std::move(p)), entry(e), img(i) {}
     File(const std::string* v, std::string p) : f(nullptr), path(std::move(p)), virt(v) {}
     File(const File&) = delete;  // owns the FILE: one instance only
     File& operator=(const File&) = delete;
@@ -125,8 +126,13 @@ std::string cstr(uint64_t p) { return p ? std::string(reinterpret_cast<const cha
 
 // Mounts served from the game image (the RomFS read in place). They keep a host folder in g_mounts too, only so the
 // runtime's virtual files (add_virtual_file) still match their paths.
-std::map<std::string, bool> g_image_mounts;
+std::map<std::string, const nxi::GameImage*> g_image_mounts;  // the game's image (rom:) or a DLC's (MountAddOnContent)
 fs::path mod_file(const std::string& rel);
+// Mods layer over the game's RomFS only, not over a DLC's.
+bool is_game_mount(const std::string& m) {
+    auto it = g_image_mounts.find(m);
+    return it != g_image_mounts.end() && it->second == game_image();
+}
 
 // "mount:/a/b" -> host path; empty when the mount is unknown.
 fs::path resolve(const std::string& guest) {
@@ -137,7 +143,7 @@ fs::path resolve(const std::string& guest) {
     if (it == g_mounts.end()) return {};
     std::string rest = guest.substr(colon + 1);
     while (!rest.empty() && (rest[0] == '/' || rest[0] == '\\')) rest.erase(0, 1);
-    if (m == "rom" || g_image_mounts.count(m)) {
+    if (m == "rom" || is_game_mount(m)) {
         if (fs::path mp = mod_file(rest); !mp.empty()) return mp;
     }
     return it->second / fs::u8path(rest);
@@ -150,10 +156,14 @@ void mount(const std::string& name, const fs::path& p) {
 }
 
 // The RomFS path of `guest` when its mount is served from the game image.
-bool image_rel(const std::string& guest, std::string& rel) {
+bool image_rel(const std::string& guest, std::string& rel, const nxi::GameImage** img = nullptr, bool* modded = nullptr) {
     auto colon = guest.find(':');
-    if (colon == std::string::npos || !g_image_mounts.count(guest.substr(0, colon))) return false;
+    if (colon == std::string::npos) return false;
+    auto it = g_image_mounts.find(guest.substr(0, colon));
+    if (it == g_image_mounts.end()) return false;
     rel = game_image_path(guest.substr(colon + 1));
+    if (img) *img = it->second;
+    if (modded) *modded = it->second == game_image();
     return true;
 }
 
@@ -311,12 +321,55 @@ void MountRom(CPU& c) {
     scan_mods();
     if (game_image()) {
         g_mounts[name] = data_root() / "extract" / "romfs";
-        g_image_mounts[name] = true;
+        g_image_mounts[name] = game_image();
         log("fs: mounted %s: -> the game file's RomFS", name.c_str());
     } else {
         mount(name, data_root() / "extract" / "romfs");
     }
     c.x[0] = kOk;
+}
+
+// ---- add-on content (DLC), read in place from the NSPs the player gave (game_image.h: addon_images) ------------------
+// The game lists the installed ones (nn::aoc::ListAddOnContent: their indices), then mounts each: name:/ is that DLC's RomFS.
+
+void QueryMountAddOnContentCacheSize(CPU& c) {  // (size_t* out, int index)
+    if (!addon_image(uint32_t(c.x[1]))) {
+        c.x[0] = kTargetNotFound;
+        return;
+    }
+    st<uint64_t>(c.x[0], 0x1000);
+    c.x[0] = kOk;
+}
+
+void MountAddOnContent(CPU& c) {  // (const char* name, int index, void* cache, size_t cache_size)
+    std::lock_guard lk(g_fs);
+    std::string name = cstr(c.x[0]);
+    uint32_t index = uint32_t(c.x[1]);
+    const nxi::GameImage* img = addon_image(index);
+    if (!img) {
+        log("fs: MountAddOnContent(%s, %u): no such add-on content", name.c_str(), index);
+        c.x[0] = kTargetNotFound;
+        return;
+    }
+    g_mounts[name] = data_root() / "extract" / "dlc" / std::to_string(index);  // only so resolve() knows the mount
+    g_image_mounts[name] = img;
+    log("fs: mounted %s: -> add-on content %u (%016llx)", name.c_str(), index, (unsigned long long)img->title_id());
+    c.x[0] = kOk;
+}
+
+void AocCount(CPU& c) { c.x[0] = uint64_t(addon_images().size()); }
+
+void AocList(CPU& c) {  // (int* out, int offset, int count) -> how many were written
+    const auto& all = addon_images();
+    int offset = int(c.x[1]), count = int(c.x[2]), n = 0;
+    for (int i = offset; i >= 0 && i < int(all.size()) && n < count; i++, n++)
+        st<int32_t>(c.x[0] + 4 * uint64_t(n), int32_t(all[size_t(i)].index));
+    c.x[0] = uint64_t(n);
+}
+
+void AocBaseId(CPU& c) {
+    const nxi::GameImage* g = game_image();
+    c.x[0] = g ? (g->title_id() & ~0xFFFull) + 0x1000 : 0;
 }
 
 // The save folder of the account::Uid at a guest address: user/save for the first user, user/save_<uid> for the others.
@@ -401,21 +454,23 @@ void CreateDirectory(CPU& c) {
 
 void GetEntryType(CPU& c) {  // (DirectoryEntryType* out, path)
     std::lock_guard lk(g_fs);
+    const nxi::GameImage* img = nullptr;
+    bool modded = false;
     fs::path p = resolve(cstr(c.x[1]));
     if (find_virtual(p)) {
         st<uint32_t>(c.x[0], 1);
         c.x[0] = kOk;
         return;
     }
-    if (std::string rel; image_rel(cstr(c.x[1]), rel)) {
-        if (!mod_file(rel).empty()) {
+    if (std::string rel; image_rel(cstr(c.x[1]), rel, &img, &modded)) {
+        if (modded && !mod_file(rel).empty()) {
             st<uint32_t>(c.x[0], 1);
             c.x[0] = kOk;
             return;
         }
-        const nxi::GameImage::Entry* e = game_image()->find(rel);
+        const nxi::GameImage::Entry* e = img->find(rel);
         if (e) st<uint32_t>(c.x[0], e->dir ? 0 : 1);
-        else if (mod_has_dir(rel)) st<uint32_t>(c.x[0], 0), e = &kModDir;
+        else if (modded && mod_has_dir(rel)) st<uint32_t>(c.x[0], 0), e = &kModDir;
         c.x[0] = e ? kOk : kPathNotFound;
         return;
     }
@@ -433,6 +488,8 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
     std::string guest = cstr(c.x[1]);
     fs::path p = resolve(guest);
     int mode = int(c.x[2]);
+    const nxi::GameImage* img = nullptr;
+    bool modded = false;
     if (const std::string* v = find_virtual(p)) {  // served directly from memory (no std::tmpfile on Android)
         uint64_t h = g_next++;
         g_files[h] = std::make_shared<File>(v, guest);
@@ -442,8 +499,8 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
         c.x[0] = kOk;
         return;
     }
-    if (std::string rel; image_rel(guest, rel)) {  // the game image's RomFS: read only
-        if (fs::path mp = mod_file(rel); !mp.empty()) {  // a mod's file replaces (or adds to) the game's
+    if (std::string rel; image_rel(guest, rel, &img, &modded)) {  // the game image's RomFS: read only
+        if (fs::path mp = modded ? mod_file(rel) : fs::path(); !mp.empty()) {  // a mod's file replaces (or adds to) the game's
             if (FILE* f = plat::fopen_utf8(utf8(mp), "rb")) {
                 uint64_t h = g_next++;
                 g_files[h] = std::make_shared<File>(f, guest);
@@ -454,7 +511,7 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
                 return;
             }
         }
-        const nxi::GameImage::Entry* e = game_image()->find(rel);
+        const nxi::GameImage::Entry* e = img->find(rel);
         if (!e || e->dir) {
             note_open("OpenFile", guest, "not in the game file");
             if (trace_fs()) log("fs: OpenFile(%s) not found in the game file", guest.c_str());
@@ -462,7 +519,7 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
             return;
         }
         uint64_t h = g_next++;
-        g_files[h] = std::make_shared<File>(e, guest);
+        g_files[h] = std::make_shared<File>(e, img, guest);
         st<uint64_t>(c.x[0], h);
         note_open("OpenFile", guest, "ok (game file)");
         if (trace_fs()) log("fs: OpenFile(%s, %d) -> %llu (game file)", guest.c_str(), mode, (unsigned long long)h);
@@ -537,7 +594,7 @@ uint64_t read_at(const File& file, int64_t off, uint64_t buf, uint64_t size) {
         return n;
     }
     uint64_t t0 = plat::monotonic_ns();
-    uint64_t n = file.entry ? game_image()->read(*file.entry, uint64_t(off), reinterpret_cast<void*>(buf), size)
+    uint64_t n = file.entry ? file.img->read(*file.entry, uint64_t(off), reinterpret_cast<void*>(buf), size)
                             : plat::read_at(file.f, off, reinterpret_cast<void*>(buf), size);
     uint64_t ms = (plat::monotonic_ns() - t0) / 1'000'000;
     if (g_trace) log("fs: read %s at %lld size %llu -> %llu", file.path.c_str(), (long long)off, (unsigned long long)size,
@@ -602,9 +659,11 @@ void OpenDirectory(CPU& c) {  // (DirectoryHandle* out, path, int mode: 1 dirs, 
     std::lock_guard lk(g_fs);
     fs::path p = resolve(cstr(c.x[1]));
     int mode = int(c.x[2]);
-    if (std::string rel; image_rel(cstr(c.x[1]), rel)) {
-        const nxi::GameImage::Entry* e = game_image()->find(rel);
-        bool in_game = e && e->dir, in_mod = mod_has_dir(rel);
+    const nxi::GameImage* img = nullptr;
+    bool modded = false;
+    if (std::string rel; image_rel(cstr(c.x[1]), rel, &img, &modded)) {
+        const nxi::GameImage::Entry* e = img->find(rel);
+        bool in_game = e && e->dir, in_mod = modded && mod_has_dir(rel);
         note_open("OpenDirectory", cstr(c.x[1]), in_game || in_mod ? "ok (game file)" : "not in the game file");
         if (!in_game && !in_mod) {
             c.x[0] = kPathNotFound;
@@ -615,10 +674,11 @@ void OpenDirectory(CPU& c) {  // (DirectoryHandle* out, path, int mode: 1 dirs, 
         // The game's folder merged with the same folder of each mod (a mod's file wins; new names are added).
         std::vector<std::pair<std::string, nxi::GameImage::Entry>> all;
         std::unordered_map<std::string, size_t> at;
-        if (in_game) all = game_image()->list(rel);
+        if (in_game) all = img->list(rel);
         for (size_t i = 0; i < all.size(); i++) at[all[i].first] = i;
         std::error_code ec;
         for (auto& root : g_mod_roots) {
+            if (!modded) break;
             fs::path dir = rel.empty() ? root : root / fs::u8path(rel);
             if (!safe_rel(rel) || !fs::is_directory(dir, ec)) continue;
             for (auto& me : fs::directory_iterator(dir, ec)) {
@@ -795,6 +855,11 @@ NX_HLE("_ZN2nn2fs18CreateCacheStorageEill", CreateCacheStorage);
 NX_HLE("_ZN2nn2fs18DeleteCacheStorageEi", DeleteCacheStorage);
 NX_HLE("_ZN2nn2fs17MountCacheStorageEPKci", MountCacheStorage);
 NX_HLE("_ZN2nn2fs8MountRomEPKc", MountRom);
+NX_HLE("_ZN2nn2fs17MountAddOnContentEPKciPvm", MountAddOnContent);
+NX_HLE("_ZN2nn2fs31QueryMountAddOnContentCacheSizeEPmi", QueryMountAddOnContentCacheSize);
+NX_HLE("_ZN2nn3aoc17CountAddOnContentEv", AocCount);
+NX_HLE("_ZN2nn3aoc16ListAddOnContentEPiii", AocList);
+NX_HLE("_ZN2nn3aoc21GetAddOnContentBaseIdEv", AocBaseId);
 NX_HLE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvmRKNS0_10ReadOptionE", ReadFileOut);
 NX_HLE("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", IsSaveDataExisting);
 NX_HLE("_ZN2nn2fs11SetFileSizeENS0_10FileHandleEl", SetFileSize);

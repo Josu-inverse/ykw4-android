@@ -25,6 +25,11 @@ public:
     // inputs: the NSP/XCI (or the parts of a split XCI) and prod.keys (title.keys if the dump needs it), as for
     // run_import. title_id 0: the only game found. Null with `error` set on failure (never key material).
     static std::unique_ptr<GameImage> open(const std::vector<InputFile>& inputs, uint64_t title_id, std::string& error);
+    // Add-on content (DLC): every .nsp among `inputs` (plus prod.keys / title.keys) that holds a Data NCA, each as an
+    // image with only a RomFS (no ExeFS; title_id() is the DLC's). base_title != 0 keeps only the DLC of that game
+    // (DLC id = base + 0x1000 + index). Whatever is skipped, and why, goes to `notes` (never key material).
+    static std::vector<std::unique_ptr<GameImage>> open_addons(const std::vector<InputFile>& inputs, uint64_t base_title,
+                                                               std::vector<std::string>& notes);
     ~GameImage();
 
     uint64_t title_id() const;
